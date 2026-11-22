@@ -990,7 +990,7 @@ int test_table_builder(void)
     double dval;
     double darr[2];
     char cval[4];
-    char carr[3][3];
+    char carr[3][2];
     int64_t iarr[2];
 
     error = tblite_new_error();
@@ -2432,28 +2432,25 @@ int test_uninitialized_dict()
         goto unexpected;
 
     dict = tblite_get_post_processing_dict(error, res);
-    if (tblite_check(error) != 1)
+    if (!tblite_check(error))
         goto unexpected;
-    tblite_clear_error(error);
 
     res = tblite_new_result();
     dict = tblite_get_post_processing_dict(error, res);
-    if (tblite_check(error) != 1)
+    if (!tblite_check(error))
         goto unexpected;
-    tblite_clear_error(error);
 
     tblite_get_singlepoint(ctx, mol, calc, res);
-    if (tblite_check(ctx) || tblite_check(error))
-        goto unexpected;
 
-    tblite_delete_double_dictionary(&dict);
+    error = NULL;
     dict = tblite_get_post_processing_dict(error, res);
-    if (tblite_check(error))
+    if (!tblite_check(error))
         goto unexpected;
+    error = tblite_new_error();
 
     int n_entries = 0;
     n_entries = tblite_get_n_entries_dict(error, dict);
-    if (!check(3, n_entries, "Number of entries of result dictionary unequal to 3"))
+    if (!check(0, n_entries, "Number of entries of empty dictionary unequal to 0"))
         goto unexpected;
     int dim1 = 0;
     int dim2 = 0;
@@ -2461,9 +2458,66 @@ int test_uninitialized_dict()
     const int index = 1;
 
     tblite_get_array_size_index(error, dict, &index, &dim1, &dim2, &dim3);
-    if (tblite_check(error))
+    if (!check_int(dim1, 0, "Check dimension of empty dict")) {
         goto unexpected;
-    if (!check_int(dim1 > 0, 1, "Check first dimension of result entry")) {
+    }
+    if (!check_int(dim2, 0, "Check dimension of empty dict")) {
+        goto unexpected;
+    }
+    if (!check_int(dim3, 0, "Check dimension of empty dict")) {
+        goto unexpected;
+    }
+
+    double array[10];
+
+    tblite_get_array_entry_index(error, dict, &index, array);
+
+    error = tblite_new_error();
+    dict = tblite_get_post_processing_dict(error, res);
+
+    error = NULL;
+    n_entries = 0;
+    n_entries = tblite_get_n_entries_dict(error, dict);
+    if (!check(0, n_entries, "Number of entries of empty dictionary unequal to 0"))
+        goto unexpected;
+    dim1 = 0;
+    dim2 = 0;
+    dim3 = 0;
+
+    tblite_get_array_size_index(error, dict, &index, &dim1, &dim2, &dim3);
+    if (!tblite_check(error)){
+        goto unexpected;
+    }
+    if (!check_int(dim1, 0, "Check dimension of empty dict")) {
+        goto unexpected;
+    }
+    if (!check_int(dim2, 0, "Check dimension of empty dict")) {
+        goto unexpected;
+    }
+    if (!check_int(dim3, 0, "Check dimension of empty dict")) {
+        goto unexpected;
+    }
+
+    tblite_get_array_entry_index(error, dict, &index, array);
+    if (!tblite_check(error)){
+        goto unexpected;
+    }
+    tblite_get_array_size_label(error, dict, "wbo", &dim1, &dim2, &dim3);
+    if (!tblite_check(error)){
+        goto unexpected;
+    }
+    if (!check_int(dim1, 0, "Check dimension of empty dict")) {
+        goto unexpected;
+    }
+    if (!check_int(dim2, 0, "Check dimension of empty dict")) {
+        goto unexpected;
+    }
+    if (!check_int(dim3, 0, "Check dimension of empty dict")) {
+        goto unexpected;
+    }
+
+    tblite_get_array_entry_label(error, dict, "wbo", array);
+    if (!tblite_check(error)){
         goto unexpected;
     }
 
@@ -2473,7 +2527,6 @@ int test_uninitialized_dict()
     tblite_delete(calc);
     tblite_delete(cont);
     tblite_delete(res);
-    tblite_delete_double_dictionary(&dict);
 
     return 0;
 
@@ -4367,9 +4420,69 @@ err:
     return 1;
 }
 
+int test_point_charge_api(void)
+{
+    printf("Test native point-charge API\n");
+    tblite_error error = tblite_new_error();
+    tblite_context ctx = tblite_new_context();
+    tblite_structure mol = NULL;
+    tblite_calculator calc = NULL;
+    tblite_container cont = NULL;
+    tblite_result res = NULL;
+    int numbers[2] = {1, 1};
+    double xyz[6] = {0.0, 0.0, -0.7, 0.0, 0.0, 0.7};
+    double charge = 0.5;
+    double pcxyz[3] = {2.0, 0.4, -0.3};
+    double hardness = 1000.0;
+    double invalid_hardness = NAN;
+    int pcnumber = 8;
+    int npc = 0;
+    double pcgradient[3] = {0.0, 0.0, 0.0};
+
+    mol = tblite_new_structure(error, 2, numbers, xyz, NULL, NULL, NULL, NULL);
+    if (tblite_check(error)) goto err;
+    calc = tblite_new_gfn2_calculator(ctx, mol, NULL);
+    if (tblite_check(ctx)) goto err;
+    cont = tblite_new_point_charges(ctx, mol, calc, 1, &charge, pcxyz, &hardness, &pcnumber);
+    if (tblite_check(ctx)) goto err;
+    tblite_calculator_push_back(ctx, calc, &cont);
+    if (tblite_check(ctx)) goto err;
+    res = tblite_new_result();
+    tblite_get_singlepoint(ctx, mol, calc, res);
+    if (tblite_check(ctx)) goto err;
+    tblite_get_result_number_of_point_charges(error, res, &npc);
+    if (tblite_check(error) || !check_int(npc, 1, "Point-charge count")) goto err;
+    tblite_get_result_point_charge_gradient(error, res, pcgradient);
+    if (tblite_check(error)) goto err;
+    if (!isfinite(pcgradient[0]) || !isfinite(pcgradient[1]) || !isfinite(pcgradient[2])) goto err;
+
+    cont = tblite_new_point_charges(ctx, mol, calc, 1, &charge, pcxyz, &invalid_hardness, &pcnumber);
+    if (!tblite_check(ctx) || cont != NULL) goto err;
+
+    tblite_delete(error);
+    tblite_delete(ctx);
+    tblite_delete(mol);
+    tblite_delete(calc);
+    tblite_delete(res);
+    return 0;
+
+err:
+    if (tblite_check(ctx)) show(ctx);
+    if (tblite_check(error)) show(error);
+    tblite_delete(error);
+    tblite_delete(ctx);
+    tblite_delete(mol);
+    tblite_delete(calc);
+    tblite_delete(cont);
+    tblite_delete(res);
+    return 1;
+}
+
+
 int main(void)
 {
     int stat = 0;
+    stat += test_point_charge_api();
     stat += test_version();
     stat += test_uninitialized_error();
     stat += test_uninitialized_context();

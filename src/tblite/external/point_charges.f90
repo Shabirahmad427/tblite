@@ -5,9 +5,11 @@
 module tblite_external_point_charges
    use mctc_env, only : wp
    use mctc_io, only : structure_type
+   use tblite_coulomb, only : harmonic_average, arithmetic_average
    use tblite_container_cache, only : container_cache
    use tblite_container_type, only : container_type
    use tblite_partition, only : owns_index
+   use tblite_scf_info, only : scf_info, shell_resolved
    use tblite_scf_potential, only : potential_type
    use tblite_wavefunction_type, only : wavefunction_type
    implicit none
@@ -19,14 +21,26 @@ module tblite_external_point_charges
       integer, allocatable :: shell_atom(:)
       real(wp) :: gexp = 2.0_wp
       logical :: harmonic = .false.
+      !> Cache of the point-charge gradient, filled by compute_pc_gradient
+      !> and read out by the collector in xtb_singlepoint
+      real(wp), allocatable :: cache_pc_gradient(:, :)
    contains
       procedure :: get_potential
+      procedure :: variable_info
       procedure :: get_energy
       procedure :: get_gradient
       procedure :: point_gradient
+      procedure :: compute_pc_gradient
    end type point_charges
 
 contains
+
+pure function variable_info(self) result(info)
+   class(point_charges), intent(in) :: self
+   type(scf_info) :: info
+
+   info = scf_info(charge=shell_resolved)
+end function variable_info
 
 subroutine new_point_charges(self, charge, xyz, hardness, shell_hardness, shell_atom, gexp, harmonic)
    type(point_charges), intent(out) :: self
@@ -47,9 +61,9 @@ pure real(wp) function pair_hardness(self, ish, ipc) result(gam)
    class(point_charges), intent(in) :: self
    integer, intent(in) :: ish, ipc
    if (self%harmonic) then
-      gam = 2.0_wp/(1.0_wp/self%shell_hardness(ish) + 1.0_wp/self%hardness(ipc))
+      gam = harmonic_average(self%shell_hardness(ish), self%hardness(ipc))
    else
-      gam = 0.5_wp*(self%shell_hardness(ish) + self%hardness(ipc))
+      gam = arithmetic_average(self%shell_hardness(ish), self%hardness(ipc))
    end if
 end function pair_hardness
 
@@ -112,6 +126,7 @@ subroutine get_gradient(self, mol, cache, wfn, gradient, sigma)
          do ipc = 1, size(self%charge)
             dr = mol%xyz(:, iat) - self%xyz(:, ipc)
             r = norm2(dr)
+            if (r == 0.0_wp) cycle
             gam = pair_hardness(self, ish, ipc)
             fac = -wfn%qsh(ish, 1)*self%charge(ipc)*r**(self%gexp-2.0_wp) &
                & /(r**self%gexp + gam**(-self%gexp))**(1.0_wp/self%gexp+1.0_wp)
@@ -125,16 +140,19 @@ subroutine point_gradient(self, mol, wfn, gradient)
    class(point_charges), intent(in) :: self
    type(structure_type), intent(in) :: mol
    type(wavefunction_type), intent(in) :: wfn
-   real(wp), intent(out) :: gradient(:, :)
+   real(wp), allocatable, intent(out) :: gradient(:, :)
    integer :: iat, ish, ipc
    real(wp) :: dr(3), r, gam, fac
+   allocate(gradient(3, size(self%charge)))
    gradient = 0.0_wp
+   if (.not.owns_index(self%partition, 1)) return
    do iat = 1, mol%nat
       do ish = 1, size(self%shell_hardness)
          if (self%shell_atom(ish) /= iat) cycle
          do ipc = 1, size(self%charge)
             dr = mol%xyz(:, iat) - self%xyz(:, ipc)
             r = norm2(dr)
+            if (r == 0.0_wp) cycle
             gam = pair_hardness(self, ish, ipc)
             fac = wfn%qsh(ish, 1)*self%charge(ipc)*r**(self%gexp-2.0_wp) &
                & /(r**self%gexp + gam**(-self%gexp))**(1.0_wp/self%gexp+1.0_wp)
@@ -144,4 +162,15 @@ subroutine point_gradient(self, mol, wfn, gradient)
    end do
 end subroutine point_gradient
 
+
+!> Compute and cache the point-charge gradient for the current wavefunction.
+!> @param[inout] self Point-charge container
+!> @param[in]    mol  Molecular structure
+!> @param[in]    wfn  Wavefunction
+subroutine compute_pc_gradient(self, mol, wfn)
+   class(point_charges), intent(inout) :: self
+   type(structure_type), intent(in) :: mol
+   type(wavefunction_type), intent(in) :: wfn
+   call self%point_gradient(mol, wfn, self%cache_pc_gradient)
+end subroutine compute_pc_gradient
 end module tblite_external_point_charges
